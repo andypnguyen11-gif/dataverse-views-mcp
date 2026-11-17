@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import Any, cast
+from typing import Any, TextIO, cast
 
+from dataverse_views_mcp.audit import AuditLog
 from dataverse_views_mcp.config import Settings
 from dataverse_views_mcp.dataverse_client import DataverseClient, FetchPage
 from dataverse_views_mcp.errors import NotFoundError
@@ -41,8 +42,11 @@ class FakeDataverse:
         self.closed = True
 
 
-def make_services(settings: Settings, fake: FakeDataverse) -> Services:
-    return build_services(settings, client=cast(DataverseClient, fake))
+def make_services(
+    settings: Settings, fake: FakeDataverse, audit_stream: TextIO | None = None
+) -> Services:
+    audit = AuditLog(settings, stream=audit_stream) if audit_stream is not None else None
+    return build_services(settings, client=cast(DataverseClient, fake), audit=audit)
 
 
 def add_view(fake: FakeDataverse, view_id: str, fetchxml: str, name: str = "Active Things") -> None:
