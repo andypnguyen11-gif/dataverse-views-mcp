@@ -27,3 +27,9 @@ uv run ruff format .          # format
 uv run mypy                   # strict type-check
 uv run bandit -c pyproject.toml -r src scripts   # static security analysis
 ```
+
+## Configure
+
+Settings come from environment variables or a local `.env` file (ignored by Git). Copy
+`.env.example` to `.env` and fill it in. The server refuses to start, with a message naming
+the setting at fault, when a required setting is missing or malformed.
