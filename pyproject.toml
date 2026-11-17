@@ -24,7 +24,6 @@ dataverse-views-mcp = "dataverse_views_mcp.server:main"
 dev = [
     "pytest>=8",
     "pytest-cov>=6",
-    "respx>=0.22",
     "ruff>=0.8",
     "mypy>=1.13",
     "bandit>=1.8",
@@ -67,7 +66,7 @@ select = ["E", "F", "W", "I", "B", "UP", "S", "ASYNC", "C4", "SIM", "RUF", "PT",
 [tool.mypy]
 python_version = "3.12"
 strict = true
-files = ["src"]
+files = ["src", "scripts"]
 
 [[tool.mypy.overrides]]
 module = ["msal", "defusedxml", "defusedxml.*"]

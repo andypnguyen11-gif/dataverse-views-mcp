@@ -51,3 +51,29 @@ def settings(make_settings: Callable[..., Settings]) -> Settings:
 
 def read_fixture(name: str) -> str:
     return (FIXTURES / name).read_text(encoding="utf-8")
+
+
+@pytest.fixture
+def anyio_backend() -> str:
+    return "asyncio"
+
+
+class FakeTokens:
+    """Stands in for sign-in. Counts how many tokens were requested."""
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def get_token(self) -> str:
+        self.calls += 1
+        return "made-up-token"
+
+
+class Sleeper:
+    """Records waits instead of sleeping."""
+
+    def __init__(self) -> None:
+        self.waits: list[float] = []
+
+    async def __call__(self, seconds: float) -> None:
+        self.waits.append(seconds)

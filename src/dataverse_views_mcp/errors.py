@@ -78,6 +78,12 @@ class CountLimitExceededError(DataverseViewsError):
     code = "count_limit_exceeded"
 
 
+class BadRequestError(DataverseViewsError):
+    """Dataverse rejected the query the server built."""
+
+    code = "bad_request"
+
+
 class ThrottledError(DataverseViewsError):
     """Dataverse is rate-limiting the server and retries were exhausted."""
 
