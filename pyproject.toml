@@ -1,0 +1,77 @@
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[project]
+name = "dataverse-views-mcp"
+version = "0.1.0"
+description = "Read-only MCP server that lets an AI agent list, describe, count, and read approved Dataverse system views."
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "mcp>=2.3,<3",
+    "msal>=1.39,<2",
+    "httpx>=0.28,<1",
+    "defusedxml>=0.7.1,<1",
+    "pydantic>=2.14,<3",
+    "pydantic-settings>=2.6,<3",
+]
+
+[project.scripts]
+dataverse-views-mcp = "dataverse_views_mcp.server:main"
+
+[dependency-groups]
+dev = [
+    "pytest>=8",
+    "pytest-cov>=6",
+    "respx>=0.22",
+    "ruff>=0.8",
+    "mypy>=1.13",
+    "bandit>=1.8",
+    "pip-audit>=2.7",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/dataverse_views_mcp"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra --strict-markers --strict-config"
+markers = [
+    "integration: needs a real Dataverse environment; skipped unless DATAVERSE_INTEGRATION=1",
+]
+filterwarnings = ["error"]
+
+[tool.coverage.run]
+branch = true
+source = ["dataverse_views_mcp"]
+
+[tool.coverage.report]
+fail_under = 90
+show_missing = true
+exclude_also = ["if TYPE_CHECKING:", "raise NotImplementedError"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+# S = flake8-bandit security rules, B = bugbear, UP = pyupgrade, ASYNC = async pitfalls
+select = ["E", "F", "W", "I", "B", "UP", "S", "ASYNC", "C4", "SIM", "RUF", "PT", "T20", "BLE"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S101", "S105", "S106"]
+"scripts/**" = ["T20"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+files = ["src"]
+
+[[tool.mypy.overrides]]
+module = ["msal", "defusedxml", "defusedxml.*"]
+ignore_missing_imports = true
+
+[tool.bandit]
+exclude_dirs = ["tests", ".venv"]
