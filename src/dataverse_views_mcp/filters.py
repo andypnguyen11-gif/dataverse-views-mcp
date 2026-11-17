@@ -170,7 +170,8 @@ def _parse_one(item: Any, position: str) -> Filter:
     return Filter(column=column, operator=operator, value=value, table=table)
 
 
-def _kind(column_type: str) -> str | None:
+def value_kind(column_type: str) -> str | None:
+    """The kind of value a filter on this column type needs, or None if not filterable."""
     if column_type in _ID_TYPES:
         return "id"
     if column_type in _INTEGER_TYPES:
@@ -212,7 +213,7 @@ def _value_fits(kind: str, value: Scalar) -> bool:
     return isinstance(value, str)
 
 
-_EXPECTED = {
+EXPECTED_VALUE = {
     "id": "a record ID from find_record, not a name",
     "integer": "a whole number (for a choice column, the choice's number)",
     "number": "a number",
@@ -224,7 +225,7 @@ _EXPECTED = {
 
 def check_filter_type(flt: Filter, column_type: str) -> None:
     """Raise unless the filter's operator and value suit the column's Dataverse type."""
-    kind = _kind(column_type)
+    kind = value_kind(column_type)
     if kind is None:
         raise InvalidFilterError(f"The column '{flt.column}' cannot be used in a filter.")
     if flt.operator not in _OPERATORS_BY_KIND[kind]:
@@ -238,7 +239,7 @@ def check_filter_type(flt: Filter, column_type: str) -> None:
     values = flt.value if isinstance(flt.value, tuple) else (flt.value,)
     if not all(_value_fits(kind, value) for value in values):
         raise InvalidFilterError(
-            f"The value for the column '{flt.column}' must be {_EXPECTED[kind]}."
+            f"The value for the column '{flt.column}' must be {EXPECTED_VALUE[kind]}."
         )
 
 

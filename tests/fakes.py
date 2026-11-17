@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import Any
+from typing import Any, cast
 
-from dataverse_views_mcp.dataverse_client import FetchPage
+from dataverse_views_mcp.config import Settings
+from dataverse_views_mcp.dataverse_client import DataverseClient, FetchPage
 from dataverse_views_mcp.errors import NotFoundError
+from dataverse_views_mcp.services import Services, build_services
 
 
 class FakeDataverse:
@@ -17,6 +19,7 @@ class FakeDataverse:
         self.fetch_pages: list[FetchPage | Exception] = []
         self.gets: list[tuple[str, dict[str, str]]] = []
         self.fetches: list[tuple[str, str]] = []
+        self.closed = False
 
     async def get(self, path: str, params: Mapping[str, str] | None = None) -> dict[str, Any]:
         self.gets.append((path, dict(params or {})))
@@ -33,6 +36,21 @@ class FakeDataverse:
         if isinstance(item, Exception):
             raise item
         return item
+
+    async def aclose(self) -> None:
+        self.closed = True
+
+
+def make_services(settings: Settings, fake: FakeDataverse) -> Services:
+    return build_services(settings, client=cast(DataverseClient, fake))
+
+
+def add_view(fake: FakeDataverse, view_id: str, fetchxml: str, name: str = "Active Things") -> None:
+    fake.responses[f"savedqueries({view_id})"] = view_row(view_id, name, fetchxml=fetchxml)
+
+
+def add_table(fake: FakeDataverse, table: str = "thing", **kwargs: Any) -> None:
+    fake.responses[f"EntityDefinitions(LogicalName='{table}')"] = table_definition(table, **kwargs)
 
 
 class Clock:
