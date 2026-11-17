@@ -19,7 +19,7 @@ from defusedxml.common import DefusedXmlException
 
 from dataverse_views_mcp.config import LOGICAL_NAME_RE
 from dataverse_views_mcp.errors import InvalidFilterError, UnsupportedViewError
-from dataverse_views_mcp.filters import Filter, condition_parts
+from dataverse_views_mcp.filters import Filter, Operator, condition_parts
 
 MAX_FETCHXML_LENGTH = 200_000
 COUNT_ALIAS = "record_count"
@@ -359,3 +359,26 @@ def to_page(
         position = list(entity).index(orders[-1]) + 1 if orders else len(entity)
         entity.insert(position, ET.Element("order", {"attribute": primary_id}))
     return result
+
+
+def build_name_search(
+    table: str, primary_id: str, primary_name: str, text: str, *, exact: bool, limit: int
+) -> ET.Element:
+    """Build a query that finds records of a table by display name.
+
+    Returns only the ID and display name. `text` is set as an attribute value, with
+    wildcard characters escaped, so it is matched literally.
+    """
+    root = ET.Element("fetch", {"count": str(limit), "page": "1"})
+    entity = ET.SubElement(root, "entity", {"name": table})
+    ET.SubElement(entity, "attribute", {"name": primary_id})
+    ET.SubElement(entity, "attribute", {"name": primary_name})
+    flt = Filter(primary_name, Operator.EQ if exact else Operator.CONTAINS, text)
+    operator, value, _ = condition_parts(flt)
+    group = ET.SubElement(entity, "filter", {"type": "and"})
+    ET.SubElement(
+        group, "condition", {"attribute": primary_name, "operator": operator, "value": value or ""}
+    )
+    ET.SubElement(entity, "order", {"attribute": primary_name})
+    ET.SubElement(entity, "order", {"attribute": primary_id})
+    return root
