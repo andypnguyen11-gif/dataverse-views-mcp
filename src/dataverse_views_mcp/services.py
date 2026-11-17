@@ -8,6 +8,7 @@ from dataverse_views_mcp.auth import MsalTokenProvider, TokenProvider
 from dataverse_views_mcp.config import Settings
 from dataverse_views_mcp.dataverse_client import DataverseClient
 from dataverse_views_mcp.metadata import MetadataService
+from dataverse_views_mcp.paging import PageTokens
 from dataverse_views_mcp.views import ViewService
 
 
@@ -17,6 +18,7 @@ class Services:
     client: DataverseClient
     views: ViewService
     metadata: MetadataService
+    page_tokens: PageTokens
 
 
 def build_services(
@@ -30,4 +32,5 @@ def build_services(
         client=dataverse,
         views=ViewService(dataverse, settings),
         metadata=MetadataService(dataverse),
+        page_tokens=PageTokens(),
     )
