@@ -74,6 +74,12 @@ async def run_view(
     )
 
     primary_id = runnable.table.primary_id
+    # Dataverse's paging cookie is keyed on the main record's ID. With joined tables a
+    # record can appear in more than one row, so the cookie is not used and pages are
+    # fetched by page number alone, which is slower but returns every row exactly once.
+    has_joins = bool(runnable.description.joins)
+    if has_joins:
+        cookie = None
     query = fetchxml.to_page(runnable.filtered_query(), primary_id, page_number, size, cookie)
     page = await services.client.fetch(runnable.table.entity_set_name, fetchxml.serialize(query))
 
@@ -92,9 +98,21 @@ async def run_view(
         if page.more_records
         else ""
     )
+    notes = []
+    if fetchxml.has_joined_sort(runnable.root):
+        notes.append(
+            "The view sorts by a column of a joined table. That sort is not applied here; "
+            "the rows are the same, in a different order."
+        )
+    if has_joins:
+        notes.append(
+            "This view joins other tables, so one record can appear in more than one row. "
+            "Use count_view, which counts each record once, for 'how many' questions."
+        )
     return {
         "view": view_reference(runnable.view.summary),
         "filters_applied": applied,
+        "notes": notes,
         "page": page_number,
         "page_size": size,
         "row_count": len(rows),

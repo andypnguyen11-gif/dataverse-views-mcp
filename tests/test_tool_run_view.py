@@ -273,3 +273,68 @@ async def test_refusals_happen_before_any_rows_are_read(settings: Settings) -> N
             [{"column": "amount", "operator": "gt", "value": 1}],
         )
     assert fake.fetches == []
+
+
+async def test_joined_view_pages_by_number_without_the_cookie(
+    make_settings: Callable[..., Settings],
+) -> None:
+    settings = make_settings(max_page_size=1)
+    row = {"thingid": "00000001-0000-0000-0000-000000000000", "name": "Thing 1"}
+    fake = make_fake(
+        "view_joined.xml",
+        FetchPage([row], "<cookie page='1'/>", True),
+        FetchPage([row], None, False),
+    )
+    services = make_services(settings, fake)
+
+    first = await run_view(services, VIEW_ID)
+    second = await run_view(services, VIEW_ID, page_marker=first["next_page_marker"])
+
+    assert second["page"] == 2
+    assert sent_query(fake, 1).get("page") == "2"
+    assert sent_query(fake, 1).get("paging-cookie") is None
+    assert any("more than one row" in note for note in first["notes"])
+    assert not any("sorts by a column" in note for note in first["notes"])
+
+
+async def test_sort_on_a_joined_table_is_dropped_and_the_result_says_so(
+    settings: Settings,
+) -> None:
+    source = (
+        "<fetch><entity name='thing'><attribute name='name'/>"
+        "<link-entity name='office' from='officeid' to='officeid' alias='off'>"
+        "<attribute name='name'/><order attribute='name'/></link-entity></entity></fetch>"
+    )
+    fake = FakeDataverse()
+    add_view(fake, VIEW_ID, source)
+    add_table(fake, "thing")
+    add_table(fake, "office", entity_set="offices", columns={"name": "String"})
+    fake.fetch_pages = [FetchPage([], None, False)]
+
+    result = await run_view(make_services(settings, fake), VIEW_ID)
+
+    assert any("sorts by a column of a joined table" in note for note in result["notes"])
+    assert [o.get("attribute") for o in sent_query(fake).iter("order")] == ["thingid"]
+
+
+async def test_single_table_view_has_no_notes(settings: Settings) -> None:
+    assert (await run_view(make_services(settings, make_fake()), VIEW_ID))["notes"] == []
+
+
+async def test_join_without_an_alias_still_returns_its_columns(settings: Settings) -> None:
+    source = (
+        "<fetch><entity name='thing'><attribute name='name'/>"
+        "<link-entity name='office' from='officeid' to='officeid'>"
+        "<attribute name='name'/></link-entity></entity></fetch>"
+    )
+    fake = FakeDataverse()
+    add_view(fake, VIEW_ID, source)
+    add_table(fake, "thing")
+    add_table(fake, "office", entity_set="offices", columns={"name": "String"})
+    row = {"thingid": "00000001-0000-0000-0000-000000000000", "name": "T", "office_1.name": "North"}
+    fake.fetch_pages = [FetchPage([row], None, False)]
+
+    result = await run_view(make_services(settings, fake), VIEW_ID)
+
+    assert sent_query(fake).find("entity/link-entity").get("alias") == "office_1"  # type: ignore[union-attr]
+    assert result["rows"][0]["values"] == {"name": "T", "office_1.name": "North"}

@@ -102,7 +102,7 @@ def test_a_count_is_never_logged(settings: Settings) -> None:
     assert "items_returned" not in lines(stream)[0]
 
 
-def test_row_counts_and_paging_are_logged_but_rows_are_not(settings: Settings) -> None:
+def test_paging_is_logged_but_rows_and_row_counts_are_not(settings: Settings) -> None:
     stream = io.StringIO()
     result = {
         "view": {"id": VIEW_ID, "name": "Active Things", "table": "thing"},
@@ -116,7 +116,9 @@ def test_row_counts_and_paging_are_logged_but_rows_are_not(settings: Settings) -
     record(AuditLog(settings, stream=stream), tool="run_view", result=result)
 
     entry = lines(stream)[0]
-    assert (entry["page"], entry["page_size"], entry["items_returned"]) == (2, 50, 1)
+    assert (entry["page"], entry["page_size"]) == (2, 50)
+    assert "items_returned" not in entry
+    assert "row_count" not in entry
     assert SECRET_ROW_TEXT not in stream.getvalue()
     assert "rows" not in entry
 
@@ -182,10 +184,10 @@ def test_hostile_arguments_cannot_forge_or_flood_the_log(settings: Settings) -> 
     entry = lines(stream)[0]
     assert entry["tool"] == "find_record"
     assert len(entry["view_id"]) < 250
-    assert len(entry["filters"]) == 50
+    assert len(entry["filters"]) == 10
     assert len(entry["filters"][0]["value"]) < 250
     assert entry["search_text"] == "line one line two"
-    assert len(stream.getvalue()) < 30_000
+    assert len(stream.getvalue()) < 16_500
 
 
 def test_deeply_nested_and_odd_arguments_are_bounded(settings: Settings) -> None:
@@ -198,6 +200,45 @@ def test_deeply_nested_and_odd_arguments_are_bounded(settings: Settings) -> None
     assert "deep" not in json.dumps(filters)
     assert filters[1] == "[omitted]"
     assert filters[2] == [1, 2]
+
+
+def test_one_call_cannot_write_an_enormous_line(settings: Settings) -> None:
+    stream = io.StringIO()
+    wide = {f"key{k}": ["v" * 200] * 50 for k in range(50)}
+
+    record(
+        AuditLog(settings, stream=stream),
+        arguments={"view_id": VIEW_ID, "filters": [wide] * 50, "search_text": "s" * 100},
+        error=InvalidFilterError("no"),
+    )
+
+    assert stream.getvalue().count("\n") == 1
+    assert len(stream.getvalue()) < 16_500
+    entry = lines(stream)[0]
+    assert entry["tool"] == "count_view"
+    assert entry["outcome"] == "refused"
+
+
+def test_line_that_is_still_too_large_keeps_a_fingerprint_instead(
+    settings: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr("dataverse_views_mcp.audit.MAX_LINE_LENGTH", 600)
+    stream = io.StringIO()
+
+    record(
+        AuditLog(settings, stream=stream),
+        arguments={
+            "view_id": VIEW_ID,
+            "filters": [{"column": "c", "value": "v" * 150}] * 10,
+            "search_text": "x",
+        },
+        error=InvalidFilterError("no"),
+    )
+
+    entry = lines(stream)[0]
+    assert entry["filters"].startswith("[omitted: too large, sha256:")
+    assert "search_text" not in entry
+    assert entry["view_id"] == VIEW_ID
 
 
 # --- privacy option --------------------------------------------------------------------------
@@ -253,6 +294,24 @@ def test_appends_to_a_file_readable_only_by_its_owner(
     written = [json.loads(line) for line in path.read_text().splitlines()]
     assert [entry["tool"] for entry in written] == ["count_view", "run_view"]
     assert stat.S_IMODE(path.stat().st_mode) == 0o600
+
+
+def test_existing_log_file_is_tightened_and_symlinks_are_refused(
+    make_settings: Callable[..., Settings], tmp_path: Path
+) -> None:
+    path = tmp_path / "audit.log"
+    path.write_text("")
+    path.chmod(0o644)
+    record(AuditLog(make_settings(audit_log_path=str(path))))
+    assert stat.S_IMODE(path.stat().st_mode) == 0o600
+
+    target = tmp_path / "elsewhere.txt"
+    target.write_text("")
+    link = tmp_path / "link.log"
+    link.symlink_to(target)
+    with pytest.raises(AuditError):
+        record(AuditLog(make_settings(audit_log_path=str(link))))
+    assert target.read_text() == ""
 
 
 def test_unwritable_log_raises(make_settings: Callable[..., Settings], tmp_path: Path) -> None:
@@ -331,11 +390,11 @@ async def test_all_five_tools_write_five_lines_with_no_record_contents(
     assert {entry["caller"]["client_declared"] for entry in entries} == {"inspector"}
     assert {entry["caller"]["client_version"] for entry in entries} == {"3.1"}
     assert entries[0]["table"] == "thing"
-    assert entries[0]["items_returned"] == 1
+    assert all("items_returned" not in entry for entry in entries)
     assert entries[2]["search_text"] == "North"
     assert entries[3]["filters"] == FILTERS
     assert entries[3]["view_name"] == "Active Things"
-    assert entries[4]["items_returned"] == 1
+    assert entries[4]["page"] == 1
     assert SECRET_ROW_TEXT not in stream.getvalue()
     assert "31337" not in stream.getvalue()
     assert "made-up-token" not in stream.getvalue()
@@ -357,6 +416,59 @@ async def test_refused_and_crashed_calls_are_audited_too(settings: Settings) -> 
         ("count_view", "refused", "view_not_approved"),
         ("list_views", "error", "internal_error"),
     ]
+
+
+async def test_calls_rejected_before_reaching_a_tool_are_audited_too(settings: Settings) -> None:
+    stream = io.StringIO()
+
+    async with Client(build_server(make_services(settings, full_fake(), stream))) as client:
+        results = [
+            await client.call_tool("run_view", {"view_id": VIEW_ID, "page_size": 999}),
+            await client.call_tool("count_view", {"view_id": VIEW_ID, "filters": "x"}),
+            await client.call_tool("describe_view", {}),
+            await client.call_tool("drop_everything", {"table": "thing"}),
+        ]
+
+    assert [result.is_error for result in results] == [True] * 4
+    entries = lines(stream)
+    assert [(e["tool"], e["outcome"], e["error_code"]) for e in entries] == [
+        ("run_view", "refused", "invalid_input"),
+        ("count_view", "refused", "invalid_input"),
+        ("describe_view", "refused", "invalid_input"),
+        ("drop_everything", "refused", "invalid_input"),
+    ]
+    assert entries[0]["view_id"] == VIEW_ID
+    assert entries[1]["filters"] == "x"
+
+
+async def test_each_call_writes_exactly_one_line(settings: Settings) -> None:
+    stream = io.StringIO()
+
+    async with Client(build_server(make_services(settings, full_fake(), stream))) as client:
+        await client.call_tool("list_views", {"table": "thing"})
+        await client.call_tool("count_view", {"view_id": OTHER_VIEW_ID})
+        await client.call_tool("list_views", {})
+
+    assert len(lines(stream)) == 3
+
+
+async def test_a_crash_logs_no_exception_text(
+    settings: Settings, caplog: pytest.LogCaptureFixture
+) -> None:
+    import logging
+
+    fake = full_fake()
+    fake.responses["savedqueries"] = RuntimeError("detail at https://org.internal/secret")
+
+    with caplog.at_level(logging.DEBUG):
+        async with Client(build_server(make_services(settings, fake, io.StringIO()))) as client:
+            result = await client.call_tool("list_views", {"table": "thing"})
+
+    assert result.is_error is True
+    assert "unexpected problem" in result.content[0].text  # type: ignore[union-attr]
+    assert "org.internal" not in caplog.text
+    assert "Traceback" not in caplog.text
+    assert "RuntimeError" in caplog.text
 
 
 async def test_a_call_that_cannot_be_audited_returns_no_data(

@@ -138,8 +138,8 @@ def test_describes_nested_joins_aliases_and_unusual_shapes() -> None:
     assert description.columns[0].result_key == "title"
     assert description.filters == ["x null"]
     assert [(j.name, j.parent, j.kind) for j in description.joins] == [
-        ("office", None, "inner"),
-        ("reg", "office", "inner"),
+        ("office_1", None, "inner"),
+        ("reg", "office_1", "inner"),
     ]
     assert [(s.column, s.join) for s in description.sort] == [("name", "reg")]
 
@@ -147,31 +147,89 @@ def test_describes_nested_joins_aliases_and_unusual_shapes() -> None:
 # --- scopes --------------------------------------------------------------------------------
 
 
-def test_scopes_list_the_columns_each_table_shows_or_filters_on() -> None:
+def test_scopes_list_only_the_columns_each_table_displays() -> None:
     known = fetchxml.scopes(fetchxml.parse(JOINED))
 
     assert set(known) == {None, "off", "nt"}
     assert known[None].table == "thing"
-    assert known[None].columns == {"name", "createdon", "statecode", "quantity", "isurgent"}
+    assert known[None].columns == {"name", "createdon"}
     assert known["off"].table == "office"
     assert known["off"].columns == {"name", "regionid"}
-    assert known["nt"].columns == {"subject", "category"}
+    assert known["nt"].columns == {"subject"}
+    assert "statecode" not in known[None].columns, "a filter-only column is not exposed"
+    assert "category" not in known["nt"].columns
 
 
-def test_scopes_handle_all_columns_cross_table_conditions_and_duplicate_joins() -> None:
+def test_views_that_select_every_column_are_refused() -> None:
+    for source in (
+        "<fetch><entity name='thing'><all-attributes/></entity></fetch>",
+        "<fetch><entity name='thing'><attribute name='name'/>"
+        "<link-entity name='o' from='a' to='b'><all-attributes/></link-entity></entity></fetch>",
+    ):
+        with pytest.raises(UnsupportedViewError, match="every column"):
+            fetchxml.parse(source)
+
+
+def test_joins_without_an_alias_get_one_so_returned_column_names_are_known() -> None:
     source = """
     <fetch><entity name="thing">
-      <all-attributes/>
-      <filter><condition entityname="off" attribute="city" operator="eq" value="x"/></filter>
-      <link-entity name="office" from="officeid" to="officeid" alias="off"/>
-      <link-entity name="note" from="thingid" to="thingid"/>
-      <link-entity name="note" from="thingid" to="otherid"/>
+      <filter>
+        <condition entityname="office" attribute="city" operator="eq" value="x"/>
+        <condition entityname="note" attribute="subject" operator="eq" value="y"/>
+      </filter>
+      <link-entity name="office" from="officeid" to="officeid">
+        <attribute name="name"/>
+      </link-entity>
+      <link-entity name="note" from="thingid" to="thingid"><attribute name="subject"/></link-entity>
+      <link-entity name="note" from="thingid" to="otherid" alias="note_1"/>
+      <link-entity name="note" from="thingid" to="thirdid"/>
     </entity></fetch>"""
-    known = fetchxml.scopes(fetchxml.parse(source))
+    root = fetchxml.parse(source)
 
-    assert known[None].all_columns is True
-    assert known["off"].columns == {"city"}
-    assert known["note"].ambiguous is True
+    aliases = [link.get("alias") for link in root.iter("link-entity")]
+    assert aliases == ["office_1", "note_2", "note_1", "note_3"]
+    description = fetchxml.describe(root)
+    assert [c.result_key for c in description.columns] == ["office_1.name", "note_2.subject"]
+    conditions = [c.get("entityname") for c in root.iter("condition")]
+    assert conditions[0] == "office_1", "a condition naming the only such join follows its alias"
+    assert conditions[1] == "note", "an ambiguous reference is left as stored"
+    known = fetchxml.scopes(root)
+    assert set(known) == {None, "office_1", "note_2", "note_1", "note_3"}
+    assert not any(scope.ambiguous for scope in known.values())
+
+
+def test_duplicate_explicit_aliases_are_flagged() -> None:
+    source = (
+        "<fetch><entity name='thing'><link-entity name='note' from='a' to='b' alias='n'/>"
+        "<link-entity name='note' from='a' to='c' alias='n'/></entity></fetch>"
+    )
+
+    assert fetchxml.scopes(fetchxml.parse(source))["n"].ambiguous is True
+
+
+def test_related_record_tests_inside_a_filter_are_described_and_not_treated_as_joins() -> None:
+    source = """
+    <fetch><entity name="thing">
+      <attribute name="name"/>
+      <filter type="and">
+        <condition attribute="statecode" operator="eq" value="0"/>
+        <link-entity name="note" from="thingid" to="thingid" link-type="any">
+          <filter><condition attribute="ownerid" operator="eq-userid"/></filter>
+        </link-entity>
+        <link-entity name="task" from="thingid" to="thingid" link-type="not any"/>
+      </filter>
+    </entity></fetch>"""
+    root = fetchxml.parse(source)
+    description = fetchxml.describe(root)
+
+    assert description.filters == [
+        "statecode eq 0 and any related note where (note.ownerid eq-userid) "
+        "and not any related task"
+    ]
+    assert description.joins == []
+    assert description.depends_on_caller is True
+    assert set(fetchxml.scopes(root)) == {None}
+    assert fetchxml.scopes(root)[None].columns == {"name"}
 
 
 # --- apply_filters -------------------------------------------------------------------------
@@ -226,12 +284,12 @@ def test_filter_on_an_unknown_or_ambiguous_joined_table_is_rejected() -> None:
         )
 
     twice = fetchxml.parse(
-        "<fetch><entity name='thing'><link-entity name='note' from='a' to='b'/>"
-        "<link-entity name='note' from='a' to='c'/></entity></fetch>"
+        "<fetch><entity name='thing'><link-entity name='note' from='a' to='b' alias='n'/>"
+        "<link-entity name='note' from='a' to='c' alias='n'/></entity></fetch>"
     )
     with pytest.raises(InvalidFilterError):
         fetchxml.apply_filters(
-            twice, parse_filters([{"column": "a", "operator": "null", "table": "note"}])
+            twice, parse_filters([{"column": "a", "operator": "null", "table": "n"}])
         )
 
 
@@ -304,16 +362,15 @@ def test_joined_view_produces_a_distinct_count_that_joins_cannot_inflate() -> No
     assert links[1].find("filter/condition") is not None
 
 
-def test_count_query_drops_paging_and_all_columns() -> None:
+def test_count_query_drops_paging() -> None:
     source = (
         "<fetch page='3' count='50' paging-cookie='x' distinct='true'>"
-        "<entity name='thing'><all-attributes/></entity></fetch>"
+        "<entity name='thing'><attribute name='name'/></entity></fetch>"
     )
 
     result = fetchxml.to_count(fetchxml.parse(source), "thingid")
 
     assert result.attrib == {"aggregate": "true"}
-    assert result.find("entity/all-attributes") is None
 
 
 def test_count_query_is_identical_on_every_run() -> None:
@@ -368,3 +425,20 @@ def test_page_query_does_not_duplicate_an_existing_id_column_or_sort() -> None:
     assert len(result.findall("entity/order")) == 1
     assert result.get("count") == "10"
     assert result.get("page") == "1"
+
+
+def test_page_query_drops_a_sort_on_a_joined_table_and_reports_it() -> None:
+    source = (
+        "<fetch><entity name='thing'><attribute name='name'/>"
+        "<link-entity name='office' from='officeid' to='officeid' alias='off'>"
+        "<attribute name='name'/><order attribute='name'/></link-entity></entity></fetch>"
+    )
+    root = fetchxml.parse(source)
+
+    result = fetchxml.to_page(root, "thingid", 1, 10, None)
+
+    assert fetchxml.has_joined_sort(root) is True
+    assert fetchxml.has_joined_sort(fetchxml.parse(SIMPLE)) is False
+    assert [o.get("attribute") for o in result.iter("order")] == ["thingid"]
+    assert result.find("entity/link-entity/order") is None
+    assert root.find("entity/link-entity/order") is not None, "the original is unchanged"

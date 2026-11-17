@@ -10,6 +10,7 @@ import sys
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
+from contextvars import ContextVar
 from typing import Annotated, Any
 
 from mcp.server.mcpserver import Context, MCPServer
@@ -20,7 +21,7 @@ from pydantic import Field
 from dataverse_views_mcp import __version__
 from dataverse_views_mcp.audit import Caller
 from dataverse_views_mcp.config import HARD_MAX_PAGE_SIZE, load_settings
-from dataverse_views_mcp.errors import ConfigurationError, DataverseViewsError
+from dataverse_views_mcp.errors import ConfigurationError, DataverseViewsError, InvalidInputError
 from dataverse_views_mcp.filters import OPERATOR_NAMES
 from dataverse_views_mcp.services import Services, build_services
 from dataverse_views_mcp.tools import count_view as count_view_tool
@@ -56,15 +57,49 @@ READ_ONLY = ToolAnnotations(
 )
 
 
-def _caller(ctx: Context[Any, Any]) -> Caller:
+# Set once a call's audit line is written, so the server can tell which rejected calls
+# never reached a tool (bad arguments, unknown tool) and still need a line.
+_audited: ContextVar[bool] = ContextVar("audited", default=False)
+
+UNEXPECTED_FAILURE = "The request could not be completed because of an unexpected problem."
+
+
+def _caller(ctx: Context[Any, Any] | None) -> Caller:
     """Who is calling, as far as the transport can tell."""
-    name, version = "unknown", ""
+    name, version, request_id = "unknown", "", ""
     try:
-        info = ctx.session.client_params.client_info
-        name, version = str(info.name), str(info.version)
-    except AttributeError:
+        if ctx is not None:
+            request_id = ctx.request_id
+            info = ctx.session.client_params.client_info
+            name, version = str(info.name), str(info.version)
+    except (AttributeError, LookupError, ValueError):
         pass
-    return Caller(client=name, client_version=version, request_id=ctx.request_id)
+    return Caller(client=name, client_version=version, request_id=request_id)
+
+
+def _audit(
+    services: Services,
+    ctx: Context[Any, Any] | None,
+    name: str,
+    arguments: dict[str, Any],
+    result: dict[str, Any] | None,
+    error: BaseException | None,
+    started: float,
+) -> None:
+    """Write the audit line, or refuse the call if it cannot be written (fail closed)."""
+    try:
+        services.audit.record(
+            tool=name,
+            caller=_caller(ctx),
+            arguments=arguments,
+            result=result,
+            error=error,
+            duration_ms=int((time.monotonic() - started) * 1000),
+        )
+    except DataverseViewsError as audit_failure:
+        logger.critical("Audit log write failed; refusing the %s call.", name)
+        raise ToolError(audit_failure.message) from None
+    _audited.set(True)
 
 
 async def run_tool(
@@ -77,37 +112,58 @@ async def run_tool(
     """Run one tool call, write its audit line, and turn failures into plain messages.
 
     Every call is audited, whether it succeeds, is refused, or fails. Expected failures
-    reach the client as a short message. Anything unexpected is left to the MCP SDK, which
-    logs it to stderr and tells the client only that the tool failed.
+    reach the client as a short message. Unexpected failures are logged by type only, so
+    no exception text (which could hold an address or data) reaches the log or the client.
     """
     started = time.monotonic()
     result: dict[str, Any] | None = None
     error: BaseException | None = None
     try:
         result = await call()
-    except Exception as exc:  # noqa: BLE001 - recorded, then re-raised below
+    except Exception as exc:  # noqa: BLE001 - recorded, then reported below
         error = exc
-    try:
-        services.audit.record(
-            tool=name,
-            caller=_caller(ctx),
-            arguments=arguments,
-            result=result,
-            error=error,
-            duration_ms=int((time.monotonic() - started) * 1000),
-        )
-    except DataverseViewsError as audit_failure:
-        # Fail closed: an unrecorded call must not return data.
-        logger.critical("Audit log write failed; refusing the %s call.", name)
-        raise ToolError(audit_failure.message) from None
+    _audit(services, ctx, name, arguments, result, error, started)
     if isinstance(error, DataverseViewsError):
         logger.info("Tool %s refused or failed: %s", name, error.code)
         raise ToolError(error.message) from None
-    if error is not None:
-        raise error
-    if result is None:  # pragma: no cover - call() either returns or raises
-        raise ToolError("The tool returned nothing.")
+    if error is not None or result is None:
+        logger.error("Tool %s failed unexpectedly (%s)", name, type(error).__name__)
+        raise ToolError(UNEXPECTED_FAILURE) from None
     return result
+
+
+class AuditedServer(MCPServer):
+    """An MCP server that also audits calls rejected before they reach a tool.
+
+    The SDK rejects a call with missing or wrongly typed arguments, or an unknown tool
+    name, without running any tool code. Those attempts are recorded here.
+    """
+
+    def __init__(self, services: Services, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self._services = services
+
+    async def call_tool(
+        self, name: str, arguments: dict[str, Any], context: Context[Any, Any] | None = None
+    ) -> Any:
+        started = time.monotonic()
+        token = _audited.set(False)
+        try:
+            return await super().call_tool(name, arguments, context)
+        except Exception:
+            if not _audited.get():
+                _audit(
+                    self._services,
+                    context,
+                    name,
+                    arguments if isinstance(arguments, dict) else {},
+                    None,
+                    InvalidInputError("The call was rejected before it reached a tool."),
+                    started,
+                )
+            raise
+        finally:
+            _audited.reset(token)
 
 
 def build_server(services: Services) -> MCPServer:
@@ -120,7 +176,8 @@ def build_server(services: Services) -> MCPServer:
         finally:
             await services.client.aclose()
 
-    server = MCPServer(
+    server = AuditedServer(
+        services,
         name="dataverse-views",
         title="Dataverse Views (read-only)",
         instructions=INSTRUCTIONS,

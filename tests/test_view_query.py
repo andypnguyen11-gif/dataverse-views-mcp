@@ -42,21 +42,17 @@ async def prepare(raw: Any, settings: Settings, source: str = "view_joined.xml")
     return await prepare_filters(raw, root, services.metadata, settings)
 
 
-async def test_only_columns_the_view_uses_are_filterable(settings: Settings) -> None:
+async def test_only_columns_the_view_displays_are_filterable(settings: Settings) -> None:
     allowed = await columns_for(read_fixture("view_joined.xml"), settings)
 
     assert allowed == {
-        None: {
-            "createdon": "DateTime",
-            "isurgent": "Boolean",
-            "name": "String",
-            "quantity": "Integer",
-            "statecode": "State",
-        },
+        None: {"createdon": "DateTime", "name": "String"},
         "off": {"name": "String", "regionid": "Lookup"},
-        "nt": {"category": "Picklist", "subject": "String"},
+        "nt": {"subject": "String"},
     }
     assert "officeid" not in allowed[None], "a column the view does not use is not filterable"
+    assert "statecode" not in allowed[None], "a column the view only filters on is not filterable"
+    assert "category" not in allowed["nt"]
 
 
 async def test_administrator_can_allow_extra_columns(
@@ -71,28 +67,11 @@ async def test_administrator_can_allow_extra_columns(
     assert "missing" not in allowed["nt"]
 
 
-async def test_view_showing_all_columns_allows_every_supported_column(settings: Settings) -> None:
-    source = "<fetch><entity name='thing'><all-attributes/></entity></fetch>"
-
-    allowed = await columns_for(source, settings)
-
-    assert set(allowed[None]) == {
-        "thingid",
-        "name",
-        "officeid",
-        "statecode",
-        "amount",
-        "quantity",
-        "createdon",
-        "isurgent",
-    }
-
-
 async def test_ambiguous_joins_are_not_filterable(settings: Settings) -> None:
     source = (
         "<fetch><entity name='thing'><attribute name='name'/>"
-        "<link-entity name='note' from='a' to='b'><attribute name='subject'/></link-entity>"
-        "<link-entity name='note' from='a' to='c'/></entity></fetch>"
+        "<link-entity name='note' from='a' to='b' alias='n'><attribute name='subject'/>"
+        "</link-entity><link-entity name='note' from='a' to='c' alias='n'/></entity></fetch>"
     )
 
     assert set(await columns_for(source, settings)) == {None}
@@ -110,13 +89,13 @@ async def test_no_filters_needs_no_metadata(settings: Settings) -> None:
 async def test_accepts_filters_on_main_and_joined_tables(settings: Settings) -> None:
     filters = await prepare(
         [
-            {"column": "quantity", "operator": "ge", "value": 3},
+            {"column": "createdon", "operator": "on_or_after", "value": "2026-01-01"},
             {"column": "regionid", "operator": "eq", "value": RECORD_ID, "table": "off"},
         ],
         settings,
     )
 
-    assert [(f.table, f.column) for f in filters] == [(None, "quantity"), ("off", "regionid")]
+    assert [(f.table, f.column) for f in filters] == [(None, "createdon"), ("off", "regionid")]
 
 
 @pytest.mark.parametrize(
@@ -130,7 +109,10 @@ async def test_accepts_filters_on_main_and_joined_tables(settings: Settings) -> 
             [{"column": "regionid", "operator": "eq", "value": "North", "table": "off"}],
             "record ID from find_record",
         ),
-        ([{"column": "quantity", "operator": "eq", "value": "many"}], "whole number"),
+        ([{"column": "quantity", "operator": "eq", "value": 3}], "cannot be filtered"),
+        ([{"column": "statecode", "operator": "eq", "value": 0}], "cannot be filtered"),
+        ([{"column": "category", "operator": "eq", "value": 1, "table": "nt"}], "cannot be filter"),
+        ([{"column": "createdon", "operator": "on", "value": "soon"}], "a date such as"),
         ("quantity eq 1", "must be a list"),
     ],
 )

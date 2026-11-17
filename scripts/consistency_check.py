@@ -5,7 +5,7 @@ Usage:
         --filters '[{"column": "officeid", "operator": "eq", "value": "<record ID>"}]' \\
         --expected <count shown in the app>
 
-Every argument can also come from the environment (or .env):
+Every argument can also come from the environment:
     DATAVERSE_TEST_VIEW_ID, DATAVERSE_TEST_FILTERS (JSON), DATAVERSE_TEST_EXPECTED_COUNT
 
 Exits 0 on PASS and 1 on FAIL. Prints the view name and the counts to this terminal only;

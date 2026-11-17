@@ -1,9 +1,11 @@
 """Audit log: one structured line for every tool call, successful or not.
 
 Each line records when, which tool, which view and filters, who called, where, and the
-outcome. It never records what the data contained: no row values, no record names, no
-counts, no credentials. If a line cannot be written, the tool call fails rather than
-proceed unrecorded.
+outcome. It records what was asked, never what came back: no row values, no result
+counts, no credentials. What was asked includes filter values and find_record's search
+text, which may be a name; set DATAVERSE_AUDIT_LOG_VALUES=false to log fingerprints of
+those instead. If a line cannot be written, the tool call fails rather than proceed
+unrecorded.
 """
 
 from __future__ import annotations
@@ -28,6 +30,9 @@ from dataverse_views_mcp.results import clean_text
 
 MAX_LOGGED_TEXT = 200
 MAX_LOGGED_ITEMS = 50
+MAX_LOGGED_FILTERS = 10
+MAX_LOGGED_KEYS = 4
+MAX_LINE_LENGTH = 16_000
 
 # Failures that are the server correctly saying no, as opposed to something breaking.
 _REFUSAL_CODES = {
@@ -40,10 +45,6 @@ _REFUSAL_CODES = {
     "not_found",
     "count_limit_exceeded",
 }
-
-# Keys in a tool result that hold how many items were returned. A count_view number is
-# derived from the data, so it is deliberately not one of these.
-_RESULT_COUNT_KEYS = ("row_count", "match_count", "view_count")
 
 
 class AuditError(DataverseViewsError):
@@ -82,7 +83,7 @@ def _safe(value: Any, depth: int = 0) -> Any:
     if isinstance(value, dict):
         return {
             _safe(str(key)): _safe(item, depth + 1)
-            for key, item in list(value.items())[:MAX_LOGGED_ITEMS]
+            for key, item in list(value.items())[:MAX_LOGGED_KEYS]
         }
     if isinstance(value, (list, tuple)):
         return [_safe(item, depth + 1) for item in value[:MAX_LOGGED_ITEMS]]
@@ -118,6 +119,8 @@ class AuditLog:
         return f"sha256:{digest[:16]}"
 
     def _filters(self, filters: Any) -> Any:
+        if isinstance(filters, (list, tuple)):
+            filters = list(filters[:MAX_LOGGED_FILTERS])
         cleaned = _safe(filters)
         if not isinstance(cleaned, list):
             return cleaned
@@ -174,14 +177,18 @@ class AuditLog:
         }
         if "search_text" in arguments:
             entry["search_text"] = self._mask(_safe(arguments["search_text"]))
-        if result:
-            if "page" in result:
-                entry["page"] = result["page"]
-                entry["page_size"] = result.get("page_size")
-            for key in _RESULT_COUNT_KEYS:
-                if key in result:
-                    entry["items_returned"] = result[key]
-        self._write(json.dumps(entry, ensure_ascii=True, default=str))
+        if result and "page" in result:
+            entry["page"] = result["page"]
+            entry["page_size"] = result.get("page_size")
+        line = json.dumps(entry, ensure_ascii=True, default=str)
+        if len(line) > MAX_LINE_LENGTH:
+            # Keep the line bounded whatever the caller sent; keep a fingerprint of what
+            # was dropped so the original can still be matched.
+            digest = hashlib.sha256(line.encode()).hexdigest()[:16]
+            entry["filters"] = f"[omitted: too large, sha256:{digest}]"
+            entry.pop("search_text", None)
+            line = json.dumps(entry, ensure_ascii=True, default=str)
+        self._write(line)
 
     def _write(self, line: str) -> None:
         try:
@@ -191,12 +198,15 @@ class AuditLog:
                     self._stream.flush()
                 elif self._settings.audit_log_path is not None:
                     # Owner-only permissions; append so earlier lines are never rewritten.
+                    # O_NOFOLLOW: refuse to write through a symbolic link placed at the path.
                     descriptor = os.open(
                         self._settings.audit_log_path,
-                        os.O_WRONLY | os.O_APPEND | os.O_CREAT,
+                        os.O_WRONLY | os.O_APPEND | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0),
                         0o600,
                     )
                     with os.fdopen(descriptor, "a", encoding="utf-8") as handle:
+                        if hasattr(os, "fchmod"):
+                            os.fchmod(descriptor, 0o600)
                         handle.write(line + "\n")
                 else:
                     sys.stderr.write(line + "\n")

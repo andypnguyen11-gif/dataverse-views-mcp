@@ -83,7 +83,6 @@ class Scope:
 
     table: str
     columns: set[str] = field(default_factory=set)
-    all_columns: bool = False
     ambiguous: bool = False
 
 
@@ -123,7 +122,43 @@ def parse(fetchxml: str) -> ET.Element:
         raise UnsupportedViewError(
             "This view is limited to a fixed number of top rows, so it cannot be used."
         )
+    if root.find(".//all-attributes") is not None:
+        raise UnsupportedViewError(
+            "This view selects every column instead of naming its columns, so it cannot be used."
+        )
+    _name_joins(root)
     return root
+
+
+def _name_joins(root: ET.Element) -> None:
+    """Give every joined table an explicit alias.
+
+    When a join has no alias, Dataverse invents one (the table name plus a number) and
+    uses it in the names of the columns it returns. Setting the alias here means the
+    server knows those names in advance, and two joins to the same table stay distinct.
+    Conditions that referred to the join by its table name are updated to match.
+    """
+    entity = root.find("entity")
+    if entity is None:  # pragma: no cover - checked by parse()
+        return
+    links = [link for link, _ in _walk_joins(entity, None)]
+    taken = {link.get("alias") for link in links if link.get("alias")}
+    unnamed: dict[str, list[ET.Element]] = {}
+    for link in links:
+        if not link.get("alias"):
+            unnamed.setdefault(link.get("name") or "", []).append(link)
+    for table, group in unnamed.items():
+        for link in group:
+            number = 1
+            while f"{table}_{number}" in taken:
+                number += 1
+            alias = f"{table}_{number}"
+            taken.add(alias)
+            link.set("alias", alias)
+        if len(group) == 1 and table not in taken:
+            for condition in root.iter("condition"):
+                if condition.get("entityname") == table:
+                    condition.set("entityname", group[0].get("alias") or table)
 
 
 def serialize(root: ET.Element) -> str:
@@ -154,10 +189,11 @@ def _walk_joins(parent: ET.Element, parent_name: str | None) -> list[tuple[ET.El
 
 
 def scopes(root: ET.Element) -> dict[str | None, Scope]:
-    """The tables in the view and, for each, the columns the view shows or filters on.
+    """The tables in the view and, for each, the columns the view displays.
 
-    The key is None for the main table and the join's alias (or name) otherwise. These
-    are the columns a caller may filter on.
+    The key is None for the main table and the join's alias otherwise. These are the
+    columns a caller may filter on. A column the view only filters on is deliberately
+    left out: it is not shown to the user, so it must not be reachable through filters.
     """
     entity = _entity(root)
     result: dict[str | None, Scope] = {None: Scope(table=entity.get("name", ""))}
@@ -169,18 +205,9 @@ def scopes(root: ET.Element) -> dict[str | None, Scope]:
             result[name] = Scope(table=link.get("name", ""))
 
     def collect(node: ET.Element, key: str | None) -> None:
-        scope = result[key]
         for child in node:
             if child.tag == "attribute" and child.get("name"):
-                scope.columns.add(child.get("name", ""))
-            elif child.tag == "all-attributes":
-                scope.all_columns = True
-            elif child.tag == "filter":
-                for condition in child.iter("condition"):
-                    target = condition.get("entityname") or key
-                    column = condition.get("attribute")
-                    if column and target in result:
-                        result[target].columns.add(column)
+                result[key].columns.add(child.get("name", ""))
             elif child.tag == "link-entity":
                 collect(child, _join_name(child))
 
@@ -211,6 +238,16 @@ def _describe_filter(node: ET.Element, join: str | None) -> str:
             nested = _describe_filter(child, join)
             if nested:
                 parts.append(f"({nested})")
+        elif child.tag == "link-entity":
+            # A related-records test inside a filter, such as "any" or "not any".
+            related = child.get("name", "?")
+            kind = child.get("link-type", "any")
+            inner = " and ".join(
+                text
+                for text in (_describe_filter(f, related) for f in child.findall("filter"))
+                if text
+            )
+            parts.append(f"{kind} related {related}" + (f" where ({inner})" if inner else ""))
     return joiner.join(parts)
 
 
@@ -309,6 +346,11 @@ def apply_filters(root: ET.Element, filters: list[Filter]) -> ET.Element:
     return result
 
 
+def has_joined_sort(root: ET.Element) -> bool:
+    """Whether the view sorts by a column of a joined table."""
+    return any(link.find("order") is not None for link, _ in _walk_joins(_entity(root), None))
+
+
 def _strip(node: ET.Element, tags: set[str]) -> None:
     for child in list(node):
         if child.tag in tags:
@@ -352,6 +394,12 @@ def to_page(
     if cookie:
         result.set("paging-cookie", cookie)
     entity = _entity(result)
+    # A sort on a joined table cannot be combined with a stable order on the main table
+    # (Dataverse applies main-table sorts first), so it is dropped. The same rows are
+    # returned; only their order differs. See has_joined_sort().
+    for link, _ in _walk_joins(entity, None):
+        for order in link.findall("order"):
+            link.remove(order)
     if not any(child.get("name") == primary_id for child in entity.findall("attribute")):
         entity.insert(0, ET.Element("attribute", {"name": primary_id}))
     if not any(order.get("attribute") == primary_id for order in entity.findall("order")):

@@ -49,6 +49,7 @@ def test_returns_token_for_the_environment_scope(settings: Settings) -> None:
     assert factory.kwargs[0]["client_id"] == settings.client_id
     assert factory.kwargs[0]["authority"] == settings.authority
     assert factory.kwargs[0]["client_credential"] == "made-up-secret-value"
+    assert factory.kwargs[0]["timeout"] == settings.http_timeout_seconds
 
 
 def test_reuses_one_msal_client_so_its_token_cache_is_used(settings: Settings) -> None:

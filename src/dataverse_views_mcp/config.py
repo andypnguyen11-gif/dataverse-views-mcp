@@ -6,10 +6,10 @@ sign-in authority, and approved views are all settings.
 
 from __future__ import annotations
 
+import os
 import re
 from pathlib import Path
 from typing import Annotated, Any, Literal
-from urllib.parse import urlsplit
 
 from pydantic import Field, SecretStr, ValidationError, field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
@@ -23,6 +23,7 @@ _API_VERSION_RE = re.compile(r"^v\d+\.\d+$")
 _THUMBPRINT_RE = re.compile(r"^[0-9A-Fa-f]{40}$")
 
 ENV_PREFIX = "DATAVERSE_"
+ENV_FILE_VARIABLE = "DATAVERSE_ENV_FILE"
 HARD_MAX_PAGE_SIZE = 250
 
 
@@ -32,16 +33,30 @@ def _split_csv(value: Any) -> Any:
     return value
 
 
+_HOST_RE = re.compile(
+    r"^(?=.{1,253}$)[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$"
+)
+_ORIGIN_RE = re.compile(r"^https://([^/:?#@\\\s]+)(?::(\d{1,5}))?/?$")
+
+
 def _https_origin(value: str, setting: str) -> str:
-    """Accept only `https://host[:port]`: no credentials, path, query, or fragment."""
-    parts = urlsplit(value.strip())
-    if parts.scheme != "https":
+    """Accept only `https://host[:port]`: no credentials, path, query, or fragment.
+
+    The address is matched against a strict pattern rather than parsed leniently, so
+    odd characters (spaces, backslashes, line breaks) cannot produce a different host.
+    """
+    if not isinstance(value, str) or not value.startswith("https://"):
         raise ValueError(f"{setting} must start with https://")
-    if not parts.hostname or parts.username or parts.password:
-        raise ValueError(f"{setting} must be a plain https address with a host name")
-    if parts.path not in ("", "/") or parts.query or parts.fragment:
-        raise ValueError(f"{setting} must not include a path, query, or fragment")
-    return f"https://{parts.netloc.lower()}"
+    match = _ORIGIN_RE.match(value)
+    if match is None:
+        raise ValueError(
+            f"{setting} must be https:// and a host name only, with no path, query, "
+            "or sign-in details"
+        )
+    host, port = match.group(1).lower(), match.group(2)
+    if not _HOST_RE.match(host) or (port is not None and not 1 <= int(port) <= 65535):
+        raise ValueError(f"{setting} does not contain a valid host name")
+    return f"https://{host}" + (f":{port}" if port else "")
 
 
 class Settings(BaseSettings):
@@ -49,7 +64,8 @@ class Settings(BaseSettings):
 
     model_config = SettingsConfigDict(
         env_prefix=ENV_PREFIX,
-        env_file=".env",
+        # No .env file is read unless DATAVERSE_ENV_FILE names one (see load_settings).
+        env_file=None,
         env_file_encoding="utf-8",
         extra="ignore",
         frozen=True,
@@ -210,6 +226,14 @@ def load_settings(**overrides: Any) -> Settings:
     The message names the settings at fault and the reason. It never echoes a value,
     so a mistyped secret cannot end up in a log.
     """
+    # A settings file is read only when named explicitly. Reading ".env" from whatever
+    # folder the server was started in would let a file planted there change settings
+    # such as the approved views or the audit log location.
+    env_file = os.environ.get(ENV_FILE_VARIABLE, "").strip()
+    if env_file and "_env_file" not in overrides:
+        if not Path(env_file).is_file():
+            raise ConfigurationError(f"{ENV_FILE_VARIABLE} does not point to a readable file")
+        overrides["_env_file"] = env_file
     try:
         return Settings(**overrides)
     except ValidationError as exc:
