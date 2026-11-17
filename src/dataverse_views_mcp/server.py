@@ -19,7 +19,9 @@ from pydantic import Field
 from dataverse_views_mcp import __version__
 from dataverse_views_mcp.config import load_settings
 from dataverse_views_mcp.errors import ConfigurationError, DataverseViewsError
+from dataverse_views_mcp.filters import OPERATOR_NAMES
 from dataverse_views_mcp.services import Services, build_services
+from dataverse_views_mcp.tools import count_view as count_view_tool
 from dataverse_views_mcp.tools import describe_view as describe_view_tool
 from dataverse_views_mcp.tools import find_record as find_record_tool
 from dataverse_views_mcp.tools import list_views as list_views_tool
@@ -32,6 +34,16 @@ INSTRUCTIONS = (
     "or run_view to read rows. Resolve names such as an office to a record ID with "
     "find_record before filtering. Always tell the user which view and filters an answer "
     "is based on. If no approved view fits the question, say so; do not estimate."
+)
+
+FILTERS_HELP = (
+    "Optional extra filters, all of which must match. Each filter is an object with "
+    "'column' (a filterable column from describe_view), 'operator' (one of: "
+    + OPERATOR_NAMES
+    + "), 'value' (text, number, true/false, or a list for 'in'; omit for null and "
+    "not_null), and optionally 'table' (the name of a joined table from describe_view). "
+    "To filter on a related record such as an office, use its record ID from find_record. "
+    'Example: [{"column": "officeid", "operator": "eq", "value": "<record ID>"}]'
 )
 
 # Every tool only reads, repeats safely, and works within one Dataverse environment.
@@ -114,6 +126,22 @@ def build_server(services: Services) -> MCPServer:
     ) -> dict[str, Any]:
         return await run_tool(
             "find_record", lambda: find_record_tool.find_record(services, table, search_text)
+        )
+
+    @server.tool(
+        name="count_view",
+        title="Count the rows in a view",
+        description=count_view_tool.DESCRIPTION,
+        annotations=READ_ONLY,
+    )
+    async def count_view(
+        view_id: Annotated[str, Field(description="ID of an approved view, from list_views.")],
+        filters: Annotated[
+            list[dict[str, Any]], Field(default_factory=list, description=FILTERS_HELP)
+        ],
+    ) -> dict[str, Any]:
+        return await run_tool(
+            "count_view", lambda: count_view_tool.count_view(services, view_id, filters)
         )
 
     return server

@@ -16,7 +16,7 @@ from tests.fakes import FakeDataverse, add_table, add_view, make_services, view_
 
 pytestmark = pytest.mark.anyio
 
-EXPECTED_TOOLS = {"list_views", "describe_view", "find_record"}
+EXPECTED_TOOLS = {"list_views", "describe_view", "find_record", "count_view"}
 # Schema constructs that Copilot Studio drops or mishandles.
 FORBIDDEN_SCHEMA_KEYS = {"$ref", "$defs", "anyOf", "oneOf", "allOf", "exclusiveMinimum"}
 
@@ -202,3 +202,39 @@ def test_main_starts_over_stdio_and_warns_about_risky_settings(
         assert caplog.text == ""
     else:
         assert warning in caplog.text
+
+
+async def test_count_view_through_the_protocol_with_and_without_filters(
+    settings: Settings,
+) -> None:
+    from dataverse_views_mcp.dataverse_client import FetchPage
+
+    fake = ready_fake()
+    fake.fetch_pages = [
+        FetchPage(rows=[{"record_count": 12}], paging_cookie=None, more_records=False)
+    ]
+    record = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+
+    async with Client(build_server(make_services(settings, fake))) as client:
+        plain = await client.call_tool("count_view", {"view_id": VIEW_ID})
+        filtered = await client.call_tool(
+            "count_view",
+            {
+                "view_id": VIEW_ID,
+                "filters": [{"column": "officeid", "operator": "eq", "value": record}],
+            },
+        )
+        bad = await client.call_tool(
+            "count_view",
+            {
+                "view_id": VIEW_ID,
+                "filters": [{"column": "officeid", "operator": "eq", "value": "N"}],
+            },
+        )
+
+    assert plain.structured_content is not None
+    assert plain.structured_content["count"] == 12
+    assert filtered.structured_content is not None
+    assert filtered.structured_content["filters_applied"][0]["value"] == record
+    assert bad.is_error is True
+    assert "record ID from find_record" in bad.content[0].text  # type: ignore[union-attr]
