@@ -1,0 +1,30 @@
+# Secrets and local settings: never commit
+.env
+.env.*
+!.env.example
+*.pem
+*.pfx
+*.key
+
+# Logs (audit logs can name views and filters)
+*.log
+logs/
+
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
+
+# Editors and OS
+.DS_Store
+.idea/
+.vscode/
