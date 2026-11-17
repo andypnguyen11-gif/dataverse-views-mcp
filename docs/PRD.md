@@ -210,6 +210,22 @@ Not a focus for this first phase
 • Agent tuning. Getting the Copilot Studio agent to prefer these tools is tested after the server is proven.
 • Approvals for production. Security review, hosting requests, and data policy checks start once there is a result to show.
 • Reuse by other agents or teams. The design allows it, but nothing is built for it yet.
+Decisions made during the build (2026-11-16)
+These record what was built. Items marked "your call" earlier in this document are resolved as follows.
+• Language: Python 3.12 or later, as recommended. Tested on 3.12, 3.13, and 3.14.
+• Size of the MVP: all five tools.
+• Identity for the MVP: one service identity, with a client secret or a certificate. Per-user sign-in remains the next step.
+• Where the code lives: a public repository in a personal GitHub account, at the owner's request. This differs from this document's recommendation of the organization's private GitHub. The repository holds no URLs, tenant IDs, table names, view names, or secrets. Confirm with the organization that a public personal repository is acceptable, or move it.
+• Count ceiling: confirmed at 50,000 records against current Microsoft documentation. Past it, count_view returns a clear error.
+• Filters: limited to columns the view displays, plus any an administrator lists. This was added so filters cannot be used to learn about columns an approved view does not show. If the approved views do not display the office column, the administrator lists it so counts can be filtered by office.
+• find_record: off until an administrator lists the tables it may search.
+• Audit log: also records the environment, the operating-system user, and the outcome. A call that cannot be logged returns no data.
+• Long queries: sent in the API's batch form when too long for a web address, as planned.
+• Views not supported: views that depend on who is asking, views limited to a fixed number of top rows, views that already total their rows, and views that select every column.
+• Joined views: count_view counts each record once. run_view returns one row per match and says so.
+• Security review: an independent review during the build found 11 gaps, all fixed. See Tasks.md.
+• Copilot Studio: research during the build found it connects to custom MCP servers over Streamable HTTP only, through a Power Platform connector, and drops tools whose input schemas use certain constructs. The tool schemas were built to avoid those. Whether custom MCP servers are available in US government clouds could not be confirmed from Microsoft documentation and still needs checking.
+• Acceptance test: built, not yet run against a real environment.
 Sources
 Limits quoted in this document come from the pages below and from search summaries of them. Confirm each against current Microsoft documentation before relying on it.
 • Dataverse MCP server: understanding the new tool shape (Microsoft)
