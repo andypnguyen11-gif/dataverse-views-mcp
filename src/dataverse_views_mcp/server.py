@@ -7,16 +7,18 @@ from __future__ import annotations
 
 import logging
 import sys
+import time
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from typing import Annotated, Any
 
-from mcp.server.mcpserver import MCPServer
+from mcp.server.mcpserver import Context, MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 from mcp.types import ToolAnnotations
 from pydantic import Field
 
 from dataverse_views_mcp import __version__
+from dataverse_views_mcp.audit import Caller
 from dataverse_views_mcp.config import HARD_MAX_PAGE_SIZE, load_settings
 from dataverse_views_mcp.errors import ConfigurationError, DataverseViewsError
 from dataverse_views_mcp.filters import OPERATOR_NAMES
@@ -54,17 +56,58 @@ READ_ONLY = ToolAnnotations(
 )
 
 
-async def run_tool(name: str, call: Callable[[], Awaitable[dict[str, Any]]]) -> dict[str, Any]:
-    """Run one tool call, turning expected failures into short, plain messages.
-
-    Anything unexpected is left to the MCP SDK, which logs it to stderr and tells the
-    client only that the tool failed, so no internal detail reaches the model.
-    """
+def _caller(ctx: Context[Any, Any]) -> Caller:
+    """Who is calling, as far as the transport can tell."""
+    name, version = "unknown", ""
     try:
-        return await call()
-    except DataverseViewsError as exc:
-        logger.info("Tool %s refused or failed: %s", name, exc.code)
-        raise ToolError(exc.message) from None
+        info = ctx.session.client_params.client_info
+        name, version = str(info.name), str(info.version)
+    except AttributeError:
+        pass
+    return Caller(client=name, client_version=version, request_id=ctx.request_id)
+
+
+async def run_tool(
+    services: Services,
+    ctx: Context[Any, Any],
+    name: str,
+    arguments: dict[str, Any],
+    call: Callable[[], Awaitable[dict[str, Any]]],
+) -> dict[str, Any]:
+    """Run one tool call, write its audit line, and turn failures into plain messages.
+
+    Every call is audited, whether it succeeds, is refused, or fails. Expected failures
+    reach the client as a short message. Anything unexpected is left to the MCP SDK, which
+    logs it to stderr and tells the client only that the tool failed.
+    """
+    started = time.monotonic()
+    result: dict[str, Any] | None = None
+    error: BaseException | None = None
+    try:
+        result = await call()
+    except Exception as exc:  # noqa: BLE001 - recorded, then re-raised below
+        error = exc
+    try:
+        services.audit.record(
+            tool=name,
+            caller=_caller(ctx),
+            arguments=arguments,
+            result=result,
+            error=error,
+            duration_ms=int((time.monotonic() - started) * 1000),
+        )
+    except DataverseViewsError as audit_failure:
+        # Fail closed: an unrecorded call must not return data.
+        logger.critical("Audit log write failed; refusing the %s call.", name)
+        raise ToolError(audit_failure.message) from None
+    if isinstance(error, DataverseViewsError):
+        logger.info("Tool %s refused or failed: %s", name, error.code)
+        raise ToolError(error.message) from None
+    if error is not None:
+        raise error
+    if result is None:  # pragma: no cover - call() either returns or raises
+        raise ToolError("The tool returned nothing.")
+    return result
 
 
 def build_server(services: Services) -> MCPServer:
@@ -95,8 +138,15 @@ def build_server(services: Services) -> MCPServer:
         table: Annotated[
             str, Field(description="Logical name of the Dataverse table, for example 'account'.")
         ],
+        ctx: Context[Any, Any],
     ) -> dict[str, Any]:
-        return await run_tool("list_views", lambda: list_views_tool.list_views(services, table))
+        return await run_tool(
+            services,
+            ctx,
+            "list_views",
+            {"table": table},
+            lambda: list_views_tool.list_views(services, table),
+        )
 
     @server.tool(
         name="describe_view",
@@ -106,9 +156,14 @@ def build_server(services: Services) -> MCPServer:
     )
     async def describe_view(
         view_id: Annotated[str, Field(description="ID of an approved view, from list_views.")],
+        ctx: Context[Any, Any],
     ) -> dict[str, Any]:
         return await run_tool(
-            "describe_view", lambda: describe_view_tool.describe_view(services, view_id)
+            services,
+            ctx,
+            "describe_view",
+            {"view_id": view_id},
+            lambda: describe_view_tool.describe_view(services, view_id),
         )
 
     @server.tool(
@@ -124,9 +179,14 @@ def build_server(services: Services) -> MCPServer:
         search_text: Annotated[
             str, Field(description="The name, or part of the name, to look for.")
         ],
+        ctx: Context[Any, Any],
     ) -> dict[str, Any]:
         return await run_tool(
-            "find_record", lambda: find_record_tool.find_record(services, table, search_text)
+            services,
+            ctx,
+            "find_record",
+            {"table": table, "search_text": search_text},
+            lambda: find_record_tool.find_record(services, table, search_text),
         )
 
     @server.tool(
@@ -140,9 +200,14 @@ def build_server(services: Services) -> MCPServer:
         filters: Annotated[
             list[dict[str, Any]], Field(default_factory=list, description=FILTERS_HELP)
         ],
+        ctx: Context[Any, Any],
     ) -> dict[str, Any]:
         return await run_tool(
-            "count_view", lambda: count_view_tool.count_view(services, view_id, filters)
+            services,
+            ctx,
+            "count_view",
+            {"view_id": view_id, "filters": filters},
+            lambda: count_view_tool.count_view(services, view_id, filters),
         )
 
     @server.tool(
@@ -156,6 +221,7 @@ def build_server(services: Services) -> MCPServer:
         filters: Annotated[
             list[dict[str, Any]], Field(default_factory=list, description=FILTERS_HELP)
         ],
+        ctx: Context[Any, Any],
         page_marker: Annotated[
             str,
             Field(
@@ -174,7 +240,10 @@ def build_server(services: Services) -> MCPServer:
         ] = 0,
     ) -> dict[str, Any]:
         return await run_tool(
+            services,
+            ctx,
             "run_view",
+            {"view_id": view_id, "filters": filters},
             lambda: run_view_tool.run_view(services, view_id, filters, page_marker, page_size),
         )
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from dataverse_views_mcp.audit import AuditLog
 from dataverse_views_mcp.auth import MsalTokenProvider, TokenProvider
 from dataverse_views_mcp.config import Settings
 from dataverse_views_mcp.dataverse_client import DataverseClient
@@ -19,12 +20,14 @@ class Services:
     views: ViewService
     metadata: MetadataService
     page_tokens: PageTokens
+    audit: AuditLog
 
 
 def build_services(
     settings: Settings,
     client: DataverseClient | None = None,
     token_provider: TokenProvider | None = None,
+    audit: AuditLog | None = None,
 ) -> Services:
     dataverse = client or DataverseClient(settings, token_provider or MsalTokenProvider(settings))
     return Services(
@@ -33,4 +36,5 @@ def build_services(
         views=ViewService(dataverse, settings),
         metadata=MetadataService(dataverse),
         page_tokens=PageTokens(),
+        audit=audit or AuditLog(settings),
     )
