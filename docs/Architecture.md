@@ -14,7 +14,7 @@ flowchart TB
   ENV[".env or environment variables<br/>address, IDs, secret, approved views"]
 
   subgraph SERVER["MCP server: dataverse_views_mcp (Python)"]
-    ENTRY["server.py<br/>MCP SDK, registers tools"]
+    ENTRY["server.py<br/>MCP SDK, registers tools,<br/>audits every call"]
     CFG["config.py<br/>settings, read by every module"]
     subgraph TOOLS["tools/ (all read-only)"]
       T1["list_views"]
@@ -23,9 +23,12 @@ flowchart TB
       T4["count_view"]
       T5["run_view"]
     end
+    VQ["view_query.py<br/>filterable columns,<br/>prepares a view to run"]
     VIEWS["views.py<br/>view lookup, approved list, cache"]
+    META["metadata.py<br/>table names and column types, cache"]
     FX["fetchxml.py<br/>read and edit view queries"]
     FIL["filters.py<br/>validate structured filters"]
+    PAGE["paging.py<br/>signed page markers"]
     DC["dataverse_client.py<br/>read-only HTTP, paging, retry"]
     AUTH["auth.py<br/>token via MSAL"]
     AUD["audit.py<br/>one log line per call"]
@@ -43,12 +46,16 @@ flowchart TB
   AGENT -.->|"Streamable HTTP"| ENTRY
   ENV -->|"read at startup"| CFG
   ENTRY --> TOOLS
-  TOOLS --> VIEWS
-  TOOLS --> FX
+  ENTRY --> AUD
+  TOOLS --> VQ
+  TOOLS --> PAGE
   TOOLS --> DC
-  TOOLS --> AUD
+  VQ --> VIEWS
+  VQ --> META
+  VQ --> FX
   FX --> FIL
   VIEWS --> DC
+  META --> DC
   DC --> AUTH
   AUTH -->|"token request"| ENTRA
   DC -->|"read-only HTTPS + FetchXML"| DV
@@ -86,10 +93,12 @@ sequenceDiagram
   A->>S: count_view(view, filter: office = record ID)
   S->>D: Read: the view's stored query
   D-->>S: FetchXML
-  Note over S: Validate filter, add it, convert to a distinct count
+  S->>D: Read: table definition (first call only)
+  D-->>S: Column names and types
+  Note over S: Check filter column and value type, add it, convert to a distinct count
   S->>D: Read: count query
   D-->>S: One number
-  Note over S: Write audit log line
+  Note over S: Write audit log line (if it cannot be written, return an error instead)
   S-->>A: Count, view name, filters, last-modified date
   A-->>U: Answer, naming the view and filters used
 ```
@@ -100,8 +109,8 @@ sequenceDiagram
 flowchart TB
   subgraph DEV["Development and testing (MVP)"]
     GH["GitHub repo<br/>one pull request per task group"]
-    CI["CI workflow<br/>lint and tests on every PR"]
-    PYT["pytest + made-up fixtures<br/>unit tests, no network"]
+    CI["CI workflow<br/>lint, types, tests, security scans<br/>on every PR"]
+    PYT["pytest + made-up fixtures<br/>unit tests, no network<br/>plus one stdio end-to-end test"]
     SMOKE["scripts/smoke_test.py<br/>one read call to confirm access"]
     CHECK["scripts/consistency_check.py<br/>count_view 10 times, compare"]
     INSP["MCP Inspector or Cursor<br/>call tools by hand"]
