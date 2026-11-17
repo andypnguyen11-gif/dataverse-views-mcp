@@ -33,3 +33,9 @@ uv run bandit -c pyproject.toml -r src scripts   # static security analysis
 Settings come from environment variables or a local `.env` file (ignored by Git). Copy
 `.env.example` to `.env` and fill it in. The server refuses to start, with a message naming
 the setting at fault, when a required setting is missing or malformed.
+
+After configuring, confirm the identity can reach Dataverse with one read-only call:
+
+```sh
+uv run python scripts/smoke_test.py
+```
