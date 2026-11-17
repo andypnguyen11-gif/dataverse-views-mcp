@@ -6,6 +6,7 @@ checked Filter objects ready to add to the view's query.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Any
 
 # Used as a type reference only; parsing is done in fetchxml.py with defusedxml.
@@ -13,9 +14,10 @@ from xml.etree import ElementTree as ET  # nosec B405
 
 from dataverse_views_mcp import fetchxml
 from dataverse_views_mcp.config import Settings
-from dataverse_views_mcp.errors import InvalidFilterError
+from dataverse_views_mcp.errors import InvalidFilterError, UserRelativeViewError
 from dataverse_views_mcp.filters import Filter, check_filter_type, parse_filters, value_kind
-from dataverse_views_mcp.metadata import MetadataService
+from dataverse_views_mcp.metadata import MetadataService, TableMetadata
+from dataverse_views_mcp.views import View, ViewService
 
 # Scope key (None for the main table, else the join's name) to {column: Dataverse type}.
 FilterableColumns = dict[str | None, dict[str, str]]
@@ -71,3 +73,42 @@ async def prepare_filters(
             )
         check_filter_type(flt, column_type)
     return filters
+
+
+@dataclass(frozen=True)
+class RunnableView:
+    """An approved view, checked and ready to be counted or read."""
+
+    view: View
+    root: ET.Element
+    description: fetchxml.ViewDescription
+    table: TableMetadata
+    filters: list[Filter]
+
+    def filtered_query(self) -> ET.Element:
+        return fetchxml.apply_filters(self.root, self.filters)
+
+    def filters_applied(self) -> list[dict[str, Any]]:
+        return [flt.as_dict() for flt in self.filters]
+
+
+async def load_runnable_view(
+    views: ViewService,
+    metadata: MetadataService,
+    settings: Settings,
+    view_id: str,
+    raw_filters: Any,
+) -> RunnableView:
+    """Fetch an approved view and check everything needed before running it."""
+    view = await views.get_view(view_id)
+    root = fetchxml.parse(view.fetchxml)
+    description = fetchxml.describe(root)
+    if description.depends_on_caller:
+        raise UserRelativeViewError(
+            "This view's results depend on who is asking (for example, a 'my records' view). "
+            "The server signs in as a service, not as the person asking, so it cannot count "
+            "or read this view. Choose a view that does not depend on the current user."
+        )
+    table = await metadata.get_table(description.table)
+    filters = await prepare_filters(raw_filters, root, metadata, settings)
+    return RunnableView(view=view, root=root, description=description, table=table, filters=filters)
