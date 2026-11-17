@@ -34,11 +34,21 @@ def test_reads_from_environment_variables(monkeypatch: pytest.MonkeyPatch) -> No
     assert loaded.extra_filter_columns == {"case.officeid"}
 
 
-def test_reads_from_dotenv_file(tmp_path: Path) -> None:
+def test_settings_file_is_read_only_when_named_explicitly(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     lines = [f"DATAVERSE_{key.upper()}={value}" for key, value in BASE_SETTINGS.items()]
     (tmp_path / ".env").write_text("\n".join(lines), encoding="utf-8")
 
+    with pytest.raises(ConfigurationError, match="DATAVERSE_URL is required"):
+        load_settings()
+
+    monkeypatch.setenv("DATAVERSE_ENV_FILE", str(tmp_path / ".env"))
     assert load_settings().client_id == BASE_SETTINGS["client_id"]
+
+    monkeypatch.setenv("DATAVERSE_ENV_FILE", str(tmp_path / "missing.env"))
+    with pytest.raises(ConfigurationError, match="DATAVERSE_ENV_FILE does not point"):
+        load_settings()
 
 
 def test_missing_required_settings_are_named() -> None:
@@ -55,9 +65,19 @@ def test_missing_required_settings_are_named() -> None:
     ("override", "expected"),
     [
         ({"url": "http://org.example.test"}, "DATAVERSE_URL must start with https://"),
-        ({"url": "https://org.example.test/api/data"}, "must not include a path"),
-        ({"url": "https://user:pw@org.example.test"}, "plain https address"),
-        ({"url": "https://org.example.test?x=1"}, "must not include a path"),
+        ({"url": "https://org.example.test/api/data"}, "host name only"),
+        ({"url": "https://user:pw@org.example.test"}, "host name only"),
+        ({"url": "https://org.example.test?x=1"}, "host name only"),
+        ({"url": "https://org.example.test#frag"}, "host name only"),
+        ({"url": "https://org.example.test:abc"}, "host name only"),
+        ({"url": "https://org.example.test:99999"}, "valid host name"),
+        ({"url": "https://org exa.mple.test"}, "host name only"),
+        ({"url": "https://evil.test\\.org.example.test"}, "host name only"),
+        ({"url": "https://org.example.test\n.evil.test"}, "host name only"),
+        ({"url": "https://org.example.test\t"}, "host name only"),
+        ({"url": "https://-bad-.example.test"}, "valid host name"),
+        ({"url": "https://localhost"}, "valid host name"),
+        ({"url": 5}, "DATAVERSE_URL"),
         ({"authority_host": "http://login.example.test"}, "DATAVERSE_AUTHORITY_HOST"),
         ({"tenant_id": "not a tenant"}, "DATAVERSE_TENANT_ID"),
         ({"client_id": "abc"}, "DATAVERSE_CLIENT_ID must be a GUID"),
@@ -126,3 +146,8 @@ def test_view_approval(make_settings: Callable[..., Settings]) -> None:
     assert not make_settings().is_view_approved(OTHER_VIEW_ID)
     assert make_settings(approved_view_ids="").approved_view_ids == frozenset()
     assert make_settings(allow_all_system_views=True).is_view_approved(OTHER_VIEW_ID)
+
+
+def test_address_is_normalized(make_settings: Callable[..., Settings]) -> None:
+    assert make_settings(url="https://ORG.Example.Test/").url == "https://org.example.test"
+    assert make_settings(url="https://org.example.test:8443").url == "https://org.example.test:8443"

@@ -582,6 +582,7 @@ name = "dataverse-views-mcp"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
+    { name = "cryptography" },
     { name = "defusedxml" },
     { name = "httpx" },
     { name = "mcp" },
@@ -602,6 +603,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "cryptography", specifier = ">=44" },
     { name = "defusedxml", specifier = ">=0.7.1,<1" },
     { name = "httpx", specifier = ">=0.28,<1" },
     { name = "mcp", specifier = ">=2.3,<3" },

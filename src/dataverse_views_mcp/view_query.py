@@ -28,9 +28,9 @@ async def filterable_columns(
 ) -> FilterableColumns:
     """The columns a caller may filter on, per table in the view.
 
-    A column is filterable when the view already shows it or filters on it, or when the
-    administrator has listed it in DATAVERSE_EXTRA_FILTER_COLUMNS. This keeps filters from
-    being used to learn about columns the approved view does not expose.
+    A column is filterable when the view displays it, or when the administrator has
+    listed it in DATAVERSE_EXTRA_FILTER_COLUMNS. This keeps filters from being used to
+    learn about columns the approved view does not show.
     """
     result: FilterableColumns = {}
     for key, scope in fetchxml.scopes(root).items():
@@ -42,7 +42,7 @@ async def filterable_columns(
             for entry in settings.extra_filter_columns
             if entry.partition(".")[0] == scope.table
         }
-        names = set(table.column_types) if scope.all_columns else scope.columns | extras
+        names = scope.columns | extras
         result[key] = {
             name: table.column_types[name]
             for name in sorted(names)

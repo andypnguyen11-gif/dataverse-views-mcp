@@ -131,6 +131,10 @@ def test_values_that_suit_their_column_type(column_type: str, operator: str, val
         ("Boolean", "gt", True, "does not suit"),
         ("DateTime", "on", "yesterday", "a date such as"),
         ("DateTime", "on", 20260131, "a date such as"),
+        ("DateTime", "on", "20260131", "a date such as"),
+        ("DateTime", "on", "2026-W05-1", "a date such as"),
+        ("DateTime", "on", "2026-02-30", "a date such as"),
+        ("DateTime", "on", "2026-01-31 10:00", "a date such as"),
         ("DateTime", "eq", "2026-01-31", "does not suit"),
         ("String", "gt", "a", "does not suit"),
         ("String", "eq", 5, "must be text"),
@@ -178,3 +182,9 @@ def test_text_search_treats_wildcards_in_caller_text_literally() -> None:
         (),
     )
     assert condition_parts(one(column="c", operator="contains", value="%")) == ("like", "%[%]%", ())
+
+
+def test_numbers_are_written_in_plain_decimal_notation() -> None:
+    assert condition_parts(one(column="c", operator="eq", value=1e17))[1] == "100000000000000000"
+    assert condition_parts(one(column="c", operator="eq", value=1.5e-7))[1] == "0.00000015"
+    assert condition_parts(one(column="c", operator="eq", value=10**17))[1] == "100000000000000000"

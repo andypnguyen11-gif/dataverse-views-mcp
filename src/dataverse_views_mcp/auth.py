@@ -62,6 +62,8 @@ class MsalTokenProvider:
                     client_id=self._settings.client_id,
                     client_credential=_client_credential(self._settings),
                     authority=self._settings.authority,
+                    # Without this, a stalled sign-in service would block forever.
+                    timeout=self._settings.http_timeout_seconds,
                 )
             except ConfigurationError:
                 raise

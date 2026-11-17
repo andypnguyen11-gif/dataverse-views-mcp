@@ -16,7 +16,8 @@ from __future__ import annotations
 import math
 import re
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import datetime
+from decimal import Decimal
 from enum import StrEnum
 from typing import Any
 
@@ -187,16 +188,20 @@ def value_kind(column_type: str) -> str | None:
     return None
 
 
+_DATE_RE = re.compile(
+    r"^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}(:\d{2}(\.\d{1,7})?)?(Z|[+-]\d{2}:\d{2})?)?$"
+)
+
+
 def _is_date(value: Scalar) -> bool:
-    if not isinstance(value, str):
+    """A calendar date, or a date and time, in the plain ISO form only."""
+    if not isinstance(value, str) or not _DATE_RE.match(value):
         return False
-    for parser in (date.fromisoformat, datetime.fromisoformat):
-        try:
-            parser(value.replace("Z", "+00:00") if parser is datetime.fromisoformat else value)
-        except ValueError:
-            continue
-        return True
-    return False
+    try:
+        datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return False
+    return True
 
 
 def _value_fits(kind: str, value: Scalar) -> bool:
@@ -253,6 +258,9 @@ def _text(value: Scalar) -> str:
         return "1" if value else "0"
     if isinstance(value, str) and GUID_RE.match(value.lower()):
         return value.lower()
+    if isinstance(value, float):
+        # Plain decimal notation; Dataverse does not accept exponents such as 1e+17.
+        return format(Decimal(repr(value)), "f")
     return str(value)
 
 

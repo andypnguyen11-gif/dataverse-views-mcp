@@ -5,7 +5,8 @@ test run never touches real data. To run it:
 
     DATAVERSE_INTEGRATION=1 uv run pytest tests/integration -m integration
 
-It reads the normal DATAVERSE_* settings (from the environment or the project's .env) plus:
+It reads the normal DATAVERSE_* settings (from the environment, or from the project's .env
+if one exists) plus:
     DATAVERSE_TEST_VIEW_ID          an approved view
     DATAVERSE_TEST_FILTERS          optional JSON list of filters (for example, one office)
     DATAVERSE_TEST_EXPECTED_COUNT   optional count shown in the app for the same view and filter
@@ -39,6 +40,11 @@ pytestmark = [
 ]
 
 
+def _env_file() -> dict[str, str]:
+    path = PROJECT_ROOT / ".env"
+    return {"_env_file": str(path)} if path.is_file() else {}
+
+
 @pytest.fixture
 def real_environment(monkeypatch: pytest.MonkeyPatch) -> dict[str, str]:
     for name, value in REAL_ENVIRONMENT.items():
@@ -49,7 +55,7 @@ def real_environment(monkeypatch: pytest.MonkeyPatch) -> dict[str, str]:
 
 
 async def test_same_count_ten_times_matches_the_app(real_environment: dict[str, str]) -> None:
-    settings = load_settings(_env_file=str(PROJECT_ROOT / ".env"))
+    settings = load_settings(**_env_file())
     services = build_services(settings, audit=AuditLog(settings, stream=io.StringIO()))
     expected = real_environment.get("DATAVERSE_TEST_EXPECTED_COUNT")
     filters = json.loads(real_environment.get("DATAVERSE_TEST_FILTERS", "[]"))
@@ -70,7 +76,7 @@ async def test_same_count_ten_times_matches_the_app(real_environment: dict[str, 
 
 
 async def test_count_view_over_the_mcp_protocol(real_environment: dict[str, str]) -> None:
-    settings = load_settings(_env_file=str(PROJECT_ROOT / ".env"))
+    settings = load_settings(**_env_file())
     services = build_services(settings, audit=AuditLog(settings, stream=io.StringIO()))
     arguments = {
         "view_id": real_environment["DATAVERSE_TEST_VIEW_ID"],
