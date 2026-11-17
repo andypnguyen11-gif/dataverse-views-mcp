@@ -1,0 +1,14 @@
+<fetch version="1.0" output-format="xml-platform" mapping="logical" distinct="false">
+  <entity name="thing">
+    <attribute name="name" />
+    <filter type="and">
+      <condition attribute="ownerid" operator="eq-userid" />
+      <condition attribute="statecode" operator="eq" value="0" />
+    </filter>
+    <link-entity name="office" from="officeid" to="officeid" alias="off">
+      <filter type="and">
+        <condition attribute="owningbusinessunit" operator="eq-businessid" />
+      </filter>
+    </link-entity>
+  </entity>
+</fetch>

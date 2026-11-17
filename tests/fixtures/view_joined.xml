@@ -1,0 +1,27 @@
+<fetch version="1.0" output-format="xml-platform" mapping="logical" distinct="false">
+  <entity name="thing">
+    <attribute name="name" />
+    <attribute name="createdon" />
+    <order attribute="createdon" descending="true" />
+    <filter type="and">
+      <condition attribute="statecode" operator="eq" value="0" />
+      <filter type="or">
+        <condition attribute="quantity" operator="gt" value="5" />
+        <condition attribute="isurgent" operator="eq" value="1" />
+      </filter>
+    </filter>
+    <link-entity name="office" from="officeid" to="officeid" link-type="outer" alias="off">
+      <attribute name="name" />
+      <attribute name="regionid" />
+    </link-entity>
+    <link-entity name="note" from="thingid" to="thingid" link-type="inner" alias="nt">
+      <attribute name="subject" />
+      <filter type="and">
+        <condition attribute="category" operator="in">
+          <value>1</value>
+          <value>2</value>
+        </condition>
+      </filter>
+    </link-entity>
+  </entity>
+</fetch>
