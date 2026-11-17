@@ -17,7 +17,7 @@ from mcp.types import ToolAnnotations
 from pydantic import Field
 
 from dataverse_views_mcp import __version__
-from dataverse_views_mcp.config import load_settings
+from dataverse_views_mcp.config import HARD_MAX_PAGE_SIZE, load_settings
 from dataverse_views_mcp.errors import ConfigurationError, DataverseViewsError
 from dataverse_views_mcp.filters import OPERATOR_NAMES
 from dataverse_views_mcp.services import Services, build_services
@@ -25,6 +25,7 @@ from dataverse_views_mcp.tools import count_view as count_view_tool
 from dataverse_views_mcp.tools import describe_view as describe_view_tool
 from dataverse_views_mcp.tools import find_record as find_record_tool
 from dataverse_views_mcp.tools import list_views as list_views_tool
+from dataverse_views_mcp.tools import run_view as run_view_tool
 
 logger = logging.getLogger("dataverse_views_mcp")
 
@@ -142,6 +143,39 @@ def build_server(services: Services) -> MCPServer:
     ) -> dict[str, Any]:
         return await run_tool(
             "count_view", lambda: count_view_tool.count_view(services, view_id, filters)
+        )
+
+    @server.tool(
+        name="run_view",
+        title="Read the rows in a view",
+        description=run_view_tool.DESCRIPTION,
+        annotations=READ_ONLY,
+    )
+    async def run_view(
+        view_id: Annotated[str, Field(description="ID of an approved view, from list_views.")],
+        filters: Annotated[
+            list[dict[str, Any]], Field(default_factory=list, description=FILTERS_HELP)
+        ],
+        page_marker: Annotated[
+            str,
+            Field(
+                description="Leave empty for the first page. For later pages, pass the "
+                "next_page_marker from the previous result, with the same view and filters."
+            ),
+        ] = "",
+        page_size: Annotated[
+            int,
+            Field(
+                ge=0,
+                le=HARD_MAX_PAGE_SIZE,
+                description="Rows per page. Leave at 0 for the server's default, which is "
+                "also the most it will return.",
+            ),
+        ] = 0,
+    ) -> dict[str, Any]:
+        return await run_tool(
+            "run_view",
+            lambda: run_view_tool.run_view(services, view_id, filters, page_marker, page_size),
         )
 
     return server

@@ -16,7 +16,7 @@ from tests.fakes import FakeDataverse, add_table, add_view, make_services, view_
 
 pytestmark = pytest.mark.anyio
 
-EXPECTED_TOOLS = {"list_views", "describe_view", "find_record", "count_view"}
+EXPECTED_TOOLS = {"list_views", "describe_view", "find_record", "count_view", "run_view"}
 # Schema constructs that Copilot Studio drops or mishandles.
 FORBIDDEN_SCHEMA_KEYS = {"$ref", "$defs", "anyOf", "oneOf", "allOf", "exclusiveMinimum"}
 
@@ -238,3 +238,23 @@ async def test_count_view_through_the_protocol_with_and_without_filters(
     assert filtered.structured_content["filters_applied"][0]["value"] == record
     assert bad.is_error is True
     assert "record ID from find_record" in bad.content[0].text  # type: ignore[union-attr]
+
+
+async def test_run_view_through_the_protocol(settings: Settings) -> None:
+    from dataverse_views_mcp.dataverse_client import FetchPage
+
+    fake = ready_fake()
+    row = {"thingid": "00000001-0000-0000-0000-000000000000", "name": "Thing 1"}
+    fake.fetch_pages = [FetchPage(rows=[row], paging_cookie="<cookie/>", more_records=True)]
+
+    async with Client(build_server(make_services(settings, fake))) as client:
+        first = await client.call_tool("run_view", {"view_id": VIEW_ID})
+        assert first.structured_content is not None
+        marker = first.structured_content["next_page_marker"]
+        second = await client.call_tool("run_view", {"view_id": VIEW_ID, "page_marker": marker})
+        too_big = await client.call_tool("run_view", {"view_id": VIEW_ID, "page_size": 100000})
+
+    assert first.structured_content["rows"][0]["values"]["name"] == "Thing 1"
+    assert second.structured_content is not None
+    assert second.structured_content["page"] == 2
+    assert too_big.is_error is True
