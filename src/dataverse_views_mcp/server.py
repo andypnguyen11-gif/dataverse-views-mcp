@@ -21,6 +21,7 @@ from dataverse_views_mcp.config import load_settings
 from dataverse_views_mcp.errors import ConfigurationError, DataverseViewsError
 from dataverse_views_mcp.services import Services, build_services
 from dataverse_views_mcp.tools import describe_view as describe_view_tool
+from dataverse_views_mcp.tools import find_record as find_record_tool
 from dataverse_views_mcp.tools import list_views as list_views_tool
 
 logger = logging.getLogger("dataverse_views_mcp")
@@ -95,6 +96,24 @@ def build_server(services: Services) -> MCPServer:
     ) -> dict[str, Any]:
         return await run_tool(
             "describe_view", lambda: describe_view_tool.describe_view(services, view_id)
+        )
+
+    @server.tool(
+        name="find_record",
+        title="Find a record by name",
+        description=find_record_tool.DESCRIPTION,
+        annotations=READ_ONLY,
+    )
+    async def find_record(
+        table: Annotated[
+            str, Field(description="Logical name of the table to search, for example 'account'.")
+        ],
+        search_text: Annotated[
+            str, Field(description="The name, or part of the name, to look for.")
+        ],
+    ) -> dict[str, Any]:
+        return await run_tool(
+            "find_record", lambda: find_record_tool.find_record(services, table, search_text)
         )
 
     return server

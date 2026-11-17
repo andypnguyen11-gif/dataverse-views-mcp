@@ -16,7 +16,7 @@ from tests.fakes import FakeDataverse, add_table, add_view, make_services, view_
 
 pytestmark = pytest.mark.anyio
 
-EXPECTED_TOOLS = {"list_views", "describe_view"}
+EXPECTED_TOOLS = {"list_views", "describe_view", "find_record"}
 # Schema constructs that Copilot Studio drops or mishandles.
 FORBIDDEN_SCHEMA_KEYS = {"$ref", "$defs", "anyOf", "oneOf", "allOf", "exclusiveMinimum"}
 
