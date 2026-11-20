@@ -23,7 +23,14 @@ from dataverse_views_mcp.errors import (
 )
 from dataverse_views_mcp.server import build_server
 from tests.conftest import OTHER_VIEW_ID, RECORD_ID, VIEW_ID, read_fixture
-from tests.fakes import FakeDataverse, add_table, add_view, make_services, view_row
+from tests.fakes import (
+    FakeDataverse,
+    add_choices,
+    add_table,
+    add_view,
+    make_services,
+    view_row,
+)
 
 pytestmark = pytest.mark.anyio
 
@@ -350,6 +357,21 @@ def full_fake() -> FakeDataverse:
         columns={"officeid": "Uniqueidentifier", "name": "String"},
     )
     return fake
+
+
+async def test_describe_view_audit_line_holds_no_choice_labels(settings: Settings) -> None:
+    fake = full_fake()
+    add_choices(fake, "thing", "State", {"statecode": [(0, "LABEL-NOT-FOR-THE-LOG")]})
+    stream = io.StringIO()
+
+    async with Client(build_server(make_services(settings, fake, stream))) as client:
+        result = await client.call_tool("describe_view", {"view_id": VIEW_ID})
+
+    assert "LABEL-NOT-FOR-THE-LOG" in str(result.structured_content)
+    (entry,) = lines(stream)
+    assert entry["tool"] == "describe_view"
+    assert entry["outcome"] == "success"
+    assert "LABEL-NOT-FOR-THE-LOG" not in stream.getvalue()
 
 
 async def test_all_five_tools_write_five_lines_with_no_record_contents(
