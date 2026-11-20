@@ -54,7 +54,41 @@ def add_view(fake: FakeDataverse, view_id: str, fetchxml: str, name: str = "Acti
 
 
 def add_table(fake: FakeDataverse, table: str = "thing", **kwargs: Any) -> None:
+    """Register a table definition. Its choice columns start with no options listed."""
     fake.responses[f"EntityDefinitions(LogicalName='{table}')"] = table_definition(table, **kwargs)
+    for kind in CHOICE_KINDS:
+        fake.responses.setdefault(choices_path(table, kind), {"value": []})
+
+
+CHOICE_KINDS = ("Picklist", "State", "Status", "Boolean")
+
+
+def choices_path(table: str, kind: str) -> str:
+    return (
+        f"EntityDefinitions(LogicalName='{table}')/Attributes/"
+        f"Microsoft.Dynamics.CRM.{kind}AttributeMetadata"
+    )
+
+
+def option(value: Any, label: Any) -> dict[str, Any]:
+    return {"Value": value, "Label": {"UserLocalizedLabel": {"Label": label}}}
+
+
+def add_choices(
+    fake: FakeDataverse, table: str, kind: str, columns: dict[str, list[tuple[Any, Any]]]
+) -> None:
+    """Register the options of a table's columns of one kind, as (value, label) pairs.
+
+    A yes/no column takes two pairs: the "true" option first, then the "false" one.
+    """
+    rows = []
+    for column, pairs in columns.items():
+        if kind == "Boolean":
+            option_set = {"TrueOption": option(*pairs[0]), "FalseOption": option(*pairs[1])}
+        else:
+            option_set = {"Options": [option(value, label) for value, label in pairs]}
+        rows.append({"LogicalName": column, "OptionSet": option_set})
+    fake.responses[choices_path(table, kind)] = {"value": rows}
 
 
 class Clock:

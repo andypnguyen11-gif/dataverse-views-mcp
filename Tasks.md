@@ -350,6 +350,19 @@ Files edited: README.md, docs/PRD.md, Tasks.md, tool descriptions in src/dataver
 
 Done when: a teammate can follow the README from a fresh clone to a working local server.
 
+PR 14: Choice labels in describe_view
+
+Goal: an agent can turn a word such as "closed" into the value a filter needs. Found when testing with a Copilot Studio agent: questions that depended on a choice column could not be answered, because nothing told the agent which number stood for which label.
+
+Files edited: src/dataverse_views_mcp/metadata.py, src/dataverse_views_mcp/tools/describe_view.py, tests/fakes.py, tests/test_metadata.py, tests/test_tool_describe_view.py, tests/test_server.py, tests/test_audit.py, README.md, Tasks.md
+
+[x] Read the options of a table's choice, state, status, and yes/no columns, with one read per kind of column, cached and capped
+[x] List them in describe_view, only on columns that are already filterable
+[x] Clean and cap the labels; flag a list that was cut short
+[x] Tests: success, caps, hostile labels, malformed replies, Dataverse failures, protocol case, audit case
+
+Done when: describe_view lists each filterable choice column's labels and values, and input schemas are unchanged.
+
 After the MVP (not tasked yet)
 
 From the PRD's out-of-scope list, in likely order:

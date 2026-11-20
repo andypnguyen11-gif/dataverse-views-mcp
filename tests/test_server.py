@@ -12,7 +12,14 @@ from dataverse_views_mcp import server as server_module
 from dataverse_views_mcp.config import Settings
 from dataverse_views_mcp.server import build_server, configure_logging, main
 from tests.conftest import BASE_SETTINGS, OTHER_VIEW_ID, VIEW_ID, read_fixture
-from tests.fakes import FakeDataverse, add_table, add_view, make_services, view_row
+from tests.fakes import (
+    FakeDataverse,
+    add_choices,
+    add_table,
+    add_view,
+    make_services,
+    view_row,
+)
 
 pytestmark = pytest.mark.anyio
 
@@ -95,6 +102,28 @@ async def test_describe_view_through_the_protocol(settings: Settings) -> None:
     assert result.is_error is False
     assert result.structured_content is not None
     assert result.structured_content["view"]["name"] == "Active Things"
+
+
+async def test_describe_view_lists_choice_labels_through_the_protocol(settings: Settings) -> None:
+    fake = ready_fake()
+    add_choices(fake, "thing", "State", {"statecode": [(0, "Active"), (1, "Inactive")]})
+
+    async with Client(build_server(make_services(settings, fake))) as client:
+        result = await client.call_tool("describe_view", {"view_id": VIEW_ID})
+        tools = {tool.name: tool for tool in (await client.list_tools()).tools}
+
+    assert result.is_error is False
+    assert result.structured_content is not None
+    statecode = next(
+        entry
+        for entry in result.structured_content["filterable_columns"]
+        if entry["column"] == "statecode"
+    )
+    assert statecode["choices"] == [
+        {"value": 0, "label": "Active"},
+        {"value": 1, "label": "Inactive"},
+    ]
+    assert "choice" in (tools["describe_view"].description or "")
 
 
 async def test_expected_failures_reach_the_client_as_short_plain_messages(

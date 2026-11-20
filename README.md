@@ -35,7 +35,7 @@ All five tools only read. Each result names the view and filters it is based on.
 | Tool | Input | Returns |
 | --- | --- | --- |
 | `list_views` | `table` | Approved views for the table: ID, name, description, last-modified date |
-| `describe_view` | `view_id` | Columns, built-in filters, sort order, joined tables, filterable columns |
+| `describe_view` | `view_id` | Columns, built-in filters, sort order, joined tables, filterable columns, and each filterable choice column's labels and values |
 | `find_record` | `table`, `search_text` | Matching records with ID and name: zero, one, or several |
 | `count_view` | `view_id`, `filters` (optional) | One number, computed by Dataverse |
 | `run_view` | `view_id`, `filters`, `page_marker`, `page_size` (all but the first optional) | One page of rows and a marker for the next page |
@@ -64,7 +64,9 @@ A filter is a column, an operator from a fixed list, and a value:
   column, list it there so counts can be filtered by office.
 - The value must match the column's type. A related record, such as an office, must be
   given as a record ID from `find_record`, never as a name. A choice column takes the
-  choice's number.
+  choice's number. `describe_view` lists each choice's label beside its number (for a yes/no
+  column, beside `true` or `false`), so a question about "closed" records can be turned
+  into the right value.
 
 ## Install
 
